@@ -1,0 +1,17 @@
+{
+  "name": "docker",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test *.test.ts server/*.test.ts src/nodes/*.test.ts"
+  },
+  "dependencies": {
+    "cn": "^0.4.0",
+    "js-yaml": "^4.1.0"
+  },
+  "peerDependencies": {
+    "@opencroft/server": "*"
+  }
+}

@@ -1,0 +1,204 @@
+{
+  "id": "opencroft.docker",
+  "name": "Docker",
+  "version": "0.1.0",
+  "description": "Docker, Volume, and Application nodes — run containers over a terminal context.",
+  "nodes": [
+    {
+      "type": "docker",
+      "name": "Docker",
+      "category": "Infrastructure",
+      "icon": "Container",
+      "handles": [
+        {
+          "id": "ctx-in",
+          "handleType": "builtin.core.terminal-context",
+          "role": "target",
+          "label": "Host"
+        },
+        {
+          "id": "context-in",
+          "handleType": "builtin.core.terminal-context",
+          "role": "target",
+          "label": "Context"
+        },
+        {
+          "id": "docker-out",
+          "handleType": "docker-context",
+          "role": "source",
+          "label": "Docker"
+        }
+      ],
+      "actions": [
+        {
+          "id": "createVolume",
+          "label": "Create Volume",
+          "icon": "Plus",
+          "description": "Create a named volume (opencroft- prefix hidden from the name).",
+          "inputSchema": {
+            "type": "object",
+            "required": ["name"],
+            "properties": { "name": { "type": "string", "description": "Friendly volume name (unprefixed)." } }
+          }
+        },
+        {
+          "id": "removeVolume",
+          "label": "Remove Volume",
+          "icon": "Trash2",
+          "description": "Delete a named volume.",
+          "inputSchema": {
+            "type": "object",
+            "required": ["name"],
+            "properties": { "name": { "type": "string", "description": "Friendly volume name (unprefixed)." } }
+          }
+        },
+        {
+          "id": "listVolumes",
+          "label": "List Volumes",
+          "icon": "HardDrive",
+          "description": "List opencroft-prefixed named volumes (name, created). No size: reading one means walking the volume's contents."
+        }
+      ]
+    },
+    {
+      "type": "volume",
+      "name": "Volume",
+      "category": "Applications",
+      "icon": "HardDrive",
+      "handles": [
+        {
+          "id": "vol-out",
+          "handleType": "volume-mount",
+          "role": "source",
+          "label": "Volume"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "Application",
+      "category": "Applications",
+      "icon": "AppWindow",
+      "handles": [
+        {
+          "id": "docker-in",
+          "handleType": "docker-context",
+          "role": "target",
+          "label": "Docker"
+        },
+        {
+          "id": "volumes-in",
+          "handleType": "volume-mount",
+          "role": "target",
+          "label": "Volumes"
+        },
+        {
+          "id": "instance-terminal-",
+          "handleType": "builtin.core.terminal-context",
+          "role": "source",
+          "label": "Terminal",
+          "dynamic": true
+        }
+      ],
+      "actions": [
+        {
+          "id": "deploy",
+          "label": "Deploy",
+          "icon": "Rocket",
+          "description": "Bring the service up via docker compose — creates or recreates the container, applying any config changes (image, volumes, command, env, ports, …). Compose runs detached on the host, so a long image build or pull is not cut short, and the Deploy tab streams its output, redacted, as compose writes it. Two cases are not streamed: on a host reached over WSL or docker-exec the tab refreshes a snapshot every few seconds, and through a Context input with a stored ssh key compose runs in the foreground and its output appears when it ends. The action finishes when compose exits, failing with the end of its output if compose failed; a cancel or a timeout stops only the waiting, and compose runs on. Use \"start\" to start existing containers in place without recreating.",
+          "execution": "async"
+        },
+        {
+          "id": "terminate",
+          "label": "Terminate",
+          "icon": "Trash2",
+          "description": "Stop the service and remove its container from the compose project — full teardown. Use \"stop\" to stop containers without removing them.",
+          "execution": "async"
+        },
+        {
+          "id": "reboot",
+          "label": "Reboot",
+          "icon": "RotateCw",
+          "description": "Restart the service's existing containers in place. Does not recreate or apply config changes — use \"deploy\" for that.",
+          "execution": "async"
+        },
+        {
+          "id": "start",
+          "label": "Start",
+          "icon": "Play",
+          "description": "Start the service's existing containers in place (`docker start`). Does not create or rebuild — use \"deploy\" (compose up) for that.",
+          "execution": "async"
+        },
+        {
+          "id": "stop",
+          "label": "Stop",
+          "icon": "Square",
+          "description": "Stop the service's running, restarting or paused containers without removing them (`docker stop`); this also ends a restart loop. For full teardown, use \"terminate\" (compose stop + rm).",
+          "execution": "async"
+        },
+        {
+          "id": "logs",
+          "label": "Logs",
+          "icon": "ScrollText",
+          "description": "Fetch recent logs for the service as plain text, like `docker logs`. Not a live stream — one snapshot per call.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "tail": { "type": "number", "description": "Number of lines from the end of the logs. Omit for all available." },
+              "since": { "type": "string", "description": "Show logs since this timestamp (RFC3339 or Unix) or relative duration (e.g. \"42m\")." },
+              "until": { "type": "string", "description": "Show logs before this timestamp or relative duration." },
+              "timestamps": { "type": "boolean", "description": "Prefix each log line with its timestamp." },
+              "containerId": { "type": "string", "description": "Target a specific container/replica. Defaults to the first container found for this service." }
+            }
+          }
+        },
+        {
+          "id": "attachVolume",
+          "label": "Attach Volume",
+          "icon": "Link",
+          "description": "Attach a named volume at a container path (takes effect on next Start/Restart).",
+          "inputSchema": {
+            "type": "object",
+            "required": ["volumeName", "containerPath"],
+            "properties": {
+              "volumeName": { "type": "string", "description": "Friendly volume name (unprefixed)." },
+              "subpath": { "type": "string", "description": "Mount only this subdirectory (or file) of the volume instead of its root." },
+              "containerPath": { "type": "string", "description": "Mount path inside the container." },
+              "readOnly": { "type": "boolean", "description": "Mount read-only. Defaults to false." },
+              "directMount": {
+                "type": "boolean",
+                "description": "Bind-mount the volume's resolved host path directly instead of using compose's volume.subpath option. Needed to mount an individual file (subpath only handles directories); works on any Docker version but only for the default \"local\" volume driver. Defaults to false."
+              }
+            }
+          }
+        },
+        {
+          "id": "detachVolume",
+          "label": "Detach Volume",
+          "icon": "Unlink",
+          "description": "Detach a named volume mount (data only; does not delete the volume). A volume can be attached at more than one container path, so both must be given to identify which mount to remove.",
+          "inputSchema": {
+            "type": "object",
+            "required": ["volumeName", "containerPath"],
+            "properties": {
+              "volumeName": { "type": "string", "description": "Friendly volume name (unprefixed)." },
+              "containerPath": { "type": "string", "description": "The container path this specific mount was attached at." }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "handleTypes": [
+    {
+      "id": "docker-context",
+      "label": "Docker Context",
+      "color": "oklch(0.75 0.14 240)"
+    },
+    {
+      "id": "volume-mount",
+      "label": "Volume Mount",
+      "color": "oklch(0.7 0.15 50)"
+    }
+  ]
+}
