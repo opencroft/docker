@@ -1,27 +1,22 @@
+import { dispatch, invoke } from '@opencroft/client/actions'
 import {
-  dispatch,
   InputHandle,
-  icons,
   inspectorIntent,
-  invoke,
-  NodeFrame,
   type NodeContextMenuContext,
   type NodeContextMenuItem,
+  NodeFrame,
   OutputHandle,
-  React,
-  toast,
-  useDockerContainers,
-  useDockerSnapshotReceived,
   useGraphEdges,
   useInspectorIntent,
   useNodeContext,
   useReactFlow,
-} from '@ext/host'
+} from '@opencroft/client/canvas'
+import { type DockerContainerSnapshot, useDockerContainers, useDockerSnapshotReceived } from '@opencroft/client/docker'
+import { Terminal } from '@opencroft/client/terminal'
 import {
   Badge,
   Button,
   Input,
-  InspectorTerminalBody,
   Label,
   Select,
   SelectContent,
@@ -34,8 +29,27 @@ import {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from '@ext/ui'
+} from '@opencroft/client/ui'
 import { cn } from 'cn'
+import {
+  AppWindow,
+  CircleAlert,
+  CircleArrowUp,
+  CircleCheck,
+  Copy,
+  Info,
+  LoaderCircle,
+  Play,
+  Rocket,
+  RotateCw,
+  ScrollText,
+  Square,
+  TerminalSquare,
+  Unlink,
+  X,
+} from 'lucide-react'
+import { type ChangeEvent, Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 
 import { type LifecycleVerb, serviceLifecycle, serviceStatus, serviceSummary } from '../../container-lifecycle'
 import { parseNamedVolumes, sameMount, serializeNamedVolumes } from '../../named-volumes'
@@ -43,8 +57,6 @@ import { ApplicationEmpty } from './application-empty'
 import { type HeaderState, OutputHeader } from './output-header'
 import { useSecretsStoreKeys } from './secrets-store-keys'
 import { VolumeEntryRow } from './volume-entry'
-
-const { useCallback, useEffect, useMemo, useState } = React
 
 const COMPOSE_PROJECT = 'opencroft'
 
@@ -91,19 +103,26 @@ export interface AppData {
   copyDockerBinaries: boolean
   labels: string
   secrets: string
+  namedVolumes?: string
 }
 
-interface ContainerInfo {
-  id: string
-  name: string
-  service: string
-  status: string
+// The host's snapshot of a container, plus the daemon's `State` word. `docker.ps` returns it and
+// the snapshot carries it, but `DockerContainerSnapshot` does not declare it.
+interface ContainerInfo extends DockerContainerSnapshot {
   state: string
-  running: boolean
 }
 
+// What the Docker node's output holds: the terminal context it runs on (what `exposeOutput` in
+// client.tsx spreads) plus the name of the Docker CLI context.
 interface DockerContext {
   type: string
+  contextName?: string
+  host?: string
+  port?: number
+  username?: string
+  password?: string
+  keyPath?: string
+  distro?: string
   [key: string]: unknown
 }
 
@@ -163,10 +182,15 @@ function SecretsPicker({ value, onChange }: { value: string; onChange: (next: st
           {selected.map((name) => {
             const missing = stale.includes(name)
             return (
-              <Badge key={name} variant={missing ? 'destructive' : 'secondary'} className='gap-1 font-mono text-[10px] pr-1' title={missing ? 'Not found in any Secrets Store' : ''}>
+              <Badge
+                key={name}
+                variant={missing ? 'destructive' : 'secondary'}
+                className='gap-1 font-mono text-[10px] pr-1'
+                title={missing ? 'Not found in any Secrets Store' : ''}
+              >
                 <span>{name}</span>
                 <button type='button' onClick={() => remove(name)} className='hover:opacity-70'>
-                  <icons.X className='h-3 w-3' />
+                  <X className='h-3 w-3' />
                 </button>
               </Badge>
             )
@@ -194,9 +218,13 @@ function SecretsPicker({ value, onChange }: { value: string; onChange: (next: st
           </SelectContent>
         </Select>
       ) : availableKeys.length === 0 ? (
-        <p className='text-[10px] text-muted-foreground italic'>No Secrets Stores in this graph. Add a Secrets Store node and define keys to pick from.</p>
+        <p className='text-[10px] text-muted-foreground italic'>
+          No Secrets Stores in this graph. Add a Secrets Store node and define keys to pick from.
+        </p>
       ) : (
-        <p className='text-[10px] text-muted-foreground italic'>All available secrets ({availableKeys.length}) selected.</p>
+        <p className='text-[10px] text-muted-foreground italic'>
+          All available secrets ({availableKeys.length}) selected.
+        </p>
       )}
     </div>
   )
@@ -228,7 +256,7 @@ function InstanceCard({
       </TooltipProvider>
       <span className='flex-1' />
       <Button variant='ghost' size='sm' className='nodrag nopan h-5 text-[10px] px-1.5' onClick={onViewLogs}>
-        <icons.ScrollText className='h-2.5 w-2.5 shrink-0' />
+        <ScrollText className='h-2.5 w-2.5 shrink-0' />
       </Button>
       {container.running ? (
         <OutputHandle type='builtin.core.terminal-context' id={`instance-terminal-${container.name || container.id}`}>
@@ -239,7 +267,7 @@ function InstanceCard({
             onClick={onViewShell}
             title={workingDir ? `Terminal (cwd: ${workingDir})` : 'Terminal'}
           >
-            <icons.TerminalSquare className='h-2.5 w-2.5 shrink-0' />
+            <TerminalSquare className='h-2.5 w-2.5 shrink-0' />
             <span>Terminal</span>
           </Button>
         </OutputHandle>
@@ -255,7 +283,10 @@ export function ApplicationNode({ id, data, selected }: { id: string; data: AppD
   const dockerNodeId = ctx?.sourceNodeId
   const serviceName = data.name || id
   const errors = (data as AppData & { __errors?: string[] }).__errors
-  const volumeCount = useMemo(() => edges.filter((e: { target: string; targetHandle?: string }) => e.target === id && e.targetHandle === 'volumes-in').length, [edges, id])
+  const volumeCount = useMemo(
+    () => edges.filter((e) => e.target === id && e.targetHandle === 'volumes-in').length,
+    [edges, id],
+  )
   const containers = useDockerContainers(dockerNodeId, serviceName) as ContainerInfo[]
   const snapshotReceived = useDockerSnapshotReceived(dockerNodeId)
   const { busy, runAction } = useNodeActionRunner(id)
@@ -270,7 +301,7 @@ export function ApplicationNode({ id, data, selected }: { id: string; data: AppD
   // what the tabs show, and a redeploy recreates the container under the same name with a new id.
   const openInspector = useCallback(
     (tab: string, containerName: string) => {
-      rf.setNodes((nds) => nds.map((n: { id: string }) => ({ ...n, selected: n.id === id })))
+      rf.setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })))
       inspectorIntent.open(id, tab, containerName)
     },
     [id, rf],
@@ -289,7 +320,7 @@ export function ApplicationNode({ id, data, selected }: { id: string; data: AppD
   return (
     <div className='flex flex-col gap-1.5'>
       <NodeFrame
-        icon={icons.AppWindow}
+        icon={AppWindow}
         title={data.name || 'Application'}
         subtitle={serviceSummary(containers)}
         status={status}
@@ -304,14 +335,39 @@ export function ApplicationNode({ id, data, selected }: { id: string; data: AppD
           // Terminate is deliberately menu-only: a full teardown does not belong on a row of
           // buttons that act on a single click.
           <div className='flex items-center gap-1'>
-            <Button variant='ghost' size='sm' className='nodrag nopan h-5 text-[10px] px-1.5' title={toggle === 'stop' ? 'Stop' : 'Start'} onClick={toggle === 'stop' ? stop : start} disabled={busy || !lifecycle[toggle]}>
-              {toggle === 'stop' ? <icons.Square className='h-2.5 w-2.5 shrink-0' /> : <icons.Play className='h-2.5 w-2.5 shrink-0' />}
+            <Button
+              variant='ghost'
+              size='sm'
+              className='nodrag nopan h-5 text-[10px] px-1.5'
+              title={toggle === 'stop' ? 'Stop' : 'Start'}
+              onClick={toggle === 'stop' ? stop : start}
+              disabled={busy || !lifecycle[toggle]}
+            >
+              {toggle === 'stop' ? (
+                <Square className='h-2.5 w-2.5 shrink-0' />
+              ) : (
+                <Play className='h-2.5 w-2.5 shrink-0' />
+              )}
             </Button>
-            <Button variant='ghost' size='sm' className='nodrag nopan h-5 text-[10px] px-1.5' title='Reboot' onClick={reboot} disabled={busy || !lifecycle.reboot}>
-              <icons.RotateCw className='h-2.5 w-2.5 shrink-0' />
+            <Button
+              variant='ghost'
+              size='sm'
+              className='nodrag nopan h-5 text-[10px] px-1.5'
+              title='Reboot'
+              onClick={reboot}
+              disabled={busy || !lifecycle.reboot}
+            >
+              <RotateCw className='h-2.5 w-2.5 shrink-0' />
             </Button>
-            <Button variant='ghost' size='sm' className='nodrag nopan h-5 text-[10px] px-1.5' title='Deploy' onClick={deploy} disabled={busy || !canDeploy(data, Boolean(ctx?.value))}>
-              <icons.Rocket className='h-2.5 w-2.5 shrink-0' />
+            <Button
+              variant='ghost'
+              size='sm'
+              className='nodrag nopan h-5 text-[10px] px-1.5'
+              title='Deploy'
+              onClick={deploy}
+              disabled={busy || !canDeploy(data, Boolean(ctx?.value))}
+            >
+              <Rocket className='h-2.5 w-2.5 shrink-0' />
             </Button>
           </div>
         }
@@ -322,7 +378,9 @@ export function ApplicationNode({ id, data, selected }: { id: string; data: AppD
               <span className='text-[10px] text-muted-foreground'>Docker</span>
             </InputHandle>
             <InputHandle type='volume-mount' id='volumes-in'>
-              <span className='text-[10px] text-muted-foreground'>Volumes{volumeCount > 0 ? ` (${volumeCount})` : ''}</span>
+              <span className='text-[10px] text-muted-foreground'>
+                Volumes{volumeCount > 0 ? ` (${volumeCount})` : ''}
+              </span>
             </InputHandle>
           </div>
           {containers.length > 0 ? (
@@ -350,7 +408,11 @@ export function ApplicationNode({ id, data, selected }: { id: string; data: AppD
 // A query failure (transport hiccup, cache miss racing an invalidation, etc.) degrades to
 // "enabled" rather than hiding the item — the dispatched action re-resolves the docker context
 // itself and surfaces the real error if there's actually nothing to do.
-async function serviceAllows(dockerNodeId: string, service: string, verb: LifecycleVerb | 'terminate'): Promise<boolean> {
+async function serviceAllows(
+  dockerNodeId: string,
+  service: string,
+  verb: LifecycleVerb | 'terminate',
+): Promise<boolean> {
   try {
     const containers = await invoke<ContainerInfo[]>('docker.ps', { dockerNodeId, service })
     return verb === 'terminate' ? containers.length > 0 : serviceLifecycle(containers)[verb]
@@ -376,7 +438,10 @@ export function canDeploy(data: AppData, wired: boolean): boolean {
 }
 
 /** Dispatches one of this node's actions, reporting a failure as a toast, and says while it runs. */
-export function useNodeActionRunner(nodeId: string): { busy: boolean; runAction: (actionId: string, label: string) => Promise<void> } {
+export function useNodeActionRunner(nodeId: string): {
+  busy: boolean
+  runAction: (actionId: string, label: string) => Promise<void>
+} {
   const [busy, setBusy] = useState(false)
   const runAction = useCallback(
     async (actionId: string, label: string) => {
@@ -408,6 +473,10 @@ function enabledFor(verb: LifecycleVerb | 'terminate') {
   }
 }
 
+async function runVerb(nodeId: string, verb: string): Promise<void> {
+  await dispatch(nodeId, verb)
+}
+
 // Five distinct lifecycle verbs: Start/Reboot/Stop act on the service's existing containers in
 // place; Deploy/Terminate are the create/destroy ends. Menu item id = dispatched action id = menu
 // label's verb, kept in sync on purpose so an agent-facing `list_actions`/`call` on this node type
@@ -418,28 +487,28 @@ export const applicationContextMenuItems: NodeContextMenuItem<AppData>[] = [
     label: 'Start',
     icon: 'Play',
     isEnabled: enabledFor('start'),
-    onSelect: ({ nodeId }) => dispatch(nodeId, 'start'),
+    onSelect: ({ nodeId }) => runVerb(nodeId, 'start'),
   },
   {
     id: 'reboot',
     label: 'Reboot',
     icon: 'RotateCw',
     isEnabled: enabledFor('reboot'),
-    onSelect: ({ nodeId }) => dispatch(nodeId, 'reboot'),
+    onSelect: ({ nodeId }) => runVerb(nodeId, 'reboot'),
   },
   {
     id: 'stop',
     label: 'Stop',
     icon: 'Square',
     isEnabled: enabledFor('stop'),
-    onSelect: ({ nodeId }) => dispatch(nodeId, 'stop'),
+    onSelect: ({ nodeId }) => runVerb(nodeId, 'stop'),
   },
   {
     id: 'deploy',
     label: 'Deploy',
     icon: 'Rocket',
     isEnabled: (ctx) => canDeploy(ctx.data, Boolean(wiredDockerNodeId(ctx))),
-    onSelect: ({ nodeId }) => dispatch(nodeId, 'deploy'),
+    onSelect: ({ nodeId }) => runVerb(nodeId, 'deploy'),
   },
   {
     id: 'terminate',
@@ -447,7 +516,7 @@ export const applicationContextMenuItems: NodeContextMenuItem<AppData>[] = [
     icon: 'Trash2',
     destructive: true,
     isEnabled: enabledFor('terminate'),
-    onSelect: ({ nodeId }) => dispatch(nodeId, 'terminate'),
+    onSelect: ({ nodeId }) => runVerb(nodeId, 'terminate'),
   },
 ]
 
@@ -542,21 +611,26 @@ function ImageUpdateChecker({ nodeId, dockerNodeId, image }: { nodeId: string; d
 
   const Icon = (() => {
     if (state.kind === 'checking') {
-      return icons.Loader2
+      return LoaderCircle
     }
     if (state.kind === 'up-to-date') {
-      return icons.CircleCheck
+      return CircleCheck
     }
     if (state.kind === 'update-available') {
-      return icons.ArrowUpCircle
+      return CircleArrowUp
     }
     if (state.kind === 'error') {
-      return icons.CircleAlert
+      return CircleAlert
     }
-    return icons.Info
+    return Info
   })()
 
-  const tone = state.kind === 'update-available' ? 'text-primary' : state.kind === 'error' ? 'text-destructive' : 'text-muted-foreground'
+  const tone =
+    state.kind === 'update-available'
+      ? 'text-primary'
+      : state.kind === 'error'
+        ? 'text-destructive'
+        : 'text-muted-foreground'
 
   return (
     <div className='flex items-center gap-1.5 text-[10px]'>
@@ -569,7 +643,13 @@ function ImageUpdateChecker({ nodeId, dockerNodeId, image }: { nodeId: string; d
           {updating ? 'Updating…' : 'Pull & restart'}
         </Button>
       ) : (
-        <Button variant='ghost' size='sm' className='h-6 text-[10px] px-2' onClick={check} disabled={state.kind === 'checking'}>
+        <Button
+          variant='ghost'
+          size='sm'
+          className='h-6 text-[10px] px-2'
+          onClick={check}
+          disabled={state.kind === 'checking'}
+        >
           Recheck
         </Button>
       )}
@@ -577,7 +657,15 @@ function ImageUpdateChecker({ nodeId, dockerNodeId, image }: { nodeId: string; d
   )
 }
 
-export function ApplicationInspector({ nodeId, data, updateData }: { nodeId: string; data: AppData; updateData: (p: Partial<AppData>) => void }) {
+export function ApplicationInspector({
+  nodeId,
+  data,
+  updateData,
+}: {
+  nodeId: string
+  data: AppData
+  updateData: (p: Partial<AppData>) => void
+}) {
   const dockerNodeId = useDockerNodeId(nodeId)
 
   const portUrls = useMemo(() => {
@@ -653,35 +741,53 @@ export function ApplicationInspector({ nodeId, data, updateData }: { nodeId: str
           <Label>URLs</Label>
           <div className='grid grid-cols-[1fr_auto_auto] gap-x-1 gap-y-0.5 items-center'>
             {portUrls.map((item, i) => (
-              <React.Fragment key={i}>
-                <a href={item.url} target='_blank' rel='noopener noreferrer' className='truncate text-primary hover:underline font-mono text-[11px]'>
+              // biome-ignore lint/suspicious/noArrayIndexKey: a derived, display-only list in which two port lines can give the same URL
+              <Fragment key={i}>
+                <a
+                  href={item.url}
+                  target='_blank'
+                  rel='noopener noreferrer'
+                  className='truncate text-primary hover:underline font-mono text-[11px]'
+                >
                   {item.url}
                 </a>
-                <Badge variant={item.category === 'public' ? 'default' : 'secondary'} className='text-[9px] px-1.5 py-0 h-4 w-full text-center cursor-default' onClick={() => copyUrl(item.url)}>
+                <Badge
+                  variant={item.category === 'public' ? 'default' : 'secondary'}
+                  className='text-[9px] px-1.5 py-0 h-4 w-full text-center cursor-default'
+                  onClick={() => copyUrl(item.url)}
+                >
                   {item.category}
                 </Badge>
                 <Button variant='ghost' size='sm' className='h-5 w-5 p-0' onClick={() => copyUrl(item.url)}>
-                  <icons.Copy className='h-3 w-3' />
+                  <Copy className='h-3 w-3' />
                 </Button>
-              </React.Fragment>
+              </Fragment>
             ))}
           </div>
         </div>
       ) : null}
       <div className='flex flex-col gap-1'>
         <Label>Service Name</Label>
-        <Input value={data.name ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ name: e.target.value })} placeholder='my-app' />
+        <Input
+          value={data.name ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ name: e.target.value })}
+          placeholder='my-app'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Image</Label>
-        <Input value={data.image ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ image: e.target.value })} placeholder='nginx:latest' />
+        <Input
+          value={data.image ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ image: e.target.value })}
+          placeholder='nginx:latest'
+        />
         <ImageUpdateChecker nodeId={nodeId} dockerNodeId={dockerNodeId} image={data.image ?? ''} />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Ports (one per line, host:container)</Label>
         <Textarea
           value={data.ports ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateData({ ports: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateData({ ports: e.target.value })}
           placeholder={'8080:80\n3000:3000'}
           className='font-mono text-xs min-h-[60px]'
         />
@@ -690,7 +796,7 @@ export function ApplicationInspector({ nodeId, data, updateData }: { nodeId: str
         <Label>Environment (one per line, KEY=VALUE)</Label>
         <Textarea
           value={data.env ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateData({ env: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateData({ env: e.target.value })}
           placeholder={'NODE_ENV=production\nDEBUG=false'}
           className='font-mono text-xs min-h-[60px]'
         />
@@ -703,102 +809,182 @@ export function ApplicationInspector({ nodeId, data, updateData }: { nodeId: str
         <Label>Command (optional)</Label>
         <Textarea
           value={data.command ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateData({ command: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateData({ command: e.target.value })}
           placeholder='npm start'
           className='font-mono text-xs min-h-[60px]'
         />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Entrypoint (optional, overrides image default)</Label>
-        <Input value={data.entrypoint ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ entrypoint: e.target.value })} placeholder='sh -c' />
+        <Input
+          value={data.entrypoint ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ entrypoint: e.target.value })}
+          placeholder='sh -c'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>IPC mode (optional)</Label>
-        <Input value={data.ipc ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ ipc: e.target.value })} placeholder='host' />
+        <Input
+          value={data.ipc ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ ipc: e.target.value })}
+          placeholder='host'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>shm_size (optional)</Label>
-        <Input value={data.shmSize ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ shmSize: e.target.value })} placeholder='8gb' />
+        <Input
+          value={data.shmSize ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ shmSize: e.target.value })}
+          placeholder='8gb'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Replicas</Label>
-        <Input type='number' value={data.replicas ?? 1} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ replicas: Number(e.target.value) || 1 })} placeholder='1' />
+        <Input
+          type='number'
+          value={data.replicas ?? 1}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ replicas: Number(e.target.value) || 1 })}
+          placeholder='1'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Restart Policy</Label>
-        <Input value={data.restart ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ restart: e.target.value })} placeholder='unless-stopped' />
+        <Input
+          value={data.restart ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ restart: e.target.value })}
+          placeholder='unless-stopped'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Container Name (optional)</Label>
-        <Input value={data.containerName ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ containerName: e.target.value })} placeholder='explicit-container-name' />
+        <Input
+          value={data.containerName ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ containerName: e.target.value })}
+          placeholder='explicit-container-name'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Working Directory (optional)</Label>
-        <Input value={data.workingDir ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ workingDir: e.target.value })} placeholder='/app' />
+        <Input
+          value={data.workingDir ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ workingDir: e.target.value })}
+          placeholder='/app'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Terminal user (optional)</Label>
-        <Input value={data.terminalUser ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ terminalUser: e.target.value })} placeholder='container default' />
+        <Input
+          value={data.terminalUser ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ terminalUser: e.target.value })}
+          placeholder='container default'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Terminal shell (optional)</Label>
-        <Input value={data.terminalShell ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ terminalShell: e.target.value })} placeholder='auto (bash → sh)' />
+        <Input
+          value={data.terminalShell ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ terminalShell: e.target.value })}
+          placeholder='auto (bash → sh)'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Depends On (comma-separated)</Label>
-        <Input value={data.dependsOn ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ dependsOn: e.target.value })} placeholder='db, redis' />
+        <Input
+          value={data.dependsOn ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ dependsOn: e.target.value })}
+          placeholder='db, redis'
+        />
       </div>
 
       <Label className='text-xs font-semibold mt-2'>Build (alternative to Image)</Label>
       <div className='flex flex-col gap-1'>
         <Label>Build Context</Label>
-        <Input value={data.buildContext ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ buildContext: e.target.value })} placeholder='./path/to/source' />
+        <Input
+          value={data.buildContext ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ buildContext: e.target.value })}
+          placeholder='./path/to/source'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Dockerfile</Label>
-        <Input value={data.buildDockerfile ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ buildDockerfile: e.target.value })} placeholder='Dockerfile' />
+        <Input
+          value={data.buildDockerfile ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ buildDockerfile: e.target.value })}
+          placeholder='Dockerfile'
+        />
       </div>
 
       <Label className='text-xs font-semibold mt-2'>Requirements</Label>
       <div className='flex flex-col gap-1'>
         <Label>Memory limit</Label>
-        <Input value={data.requirementMemory ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ requirementMemory: e.target.value })} placeholder='512m, 2g' />
+        <Input
+          value={data.requirementMemory ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ requirementMemory: e.target.value })}
+          placeholder='512m, 2g'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>vCPU limit</Label>
-        <Input value={data.requirementCpu ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ requirementCpu: e.target.value })} placeholder='0.5, 2' />
+        <Input
+          value={data.requirementCpu ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ requirementCpu: e.target.value })}
+          placeholder='0.5, 2'
+        />
       </div>
 
       <Label className='text-xs font-semibold mt-2'>Runtime</Label>
       <label className='flex items-center gap-2 text-xs'>
-        <input type='checkbox' checked={data.gpu ?? false} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ gpu: e.target.checked })} />
+        <input
+          type='checkbox'
+          checked={data.gpu ?? false}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ gpu: e.target.checked })}
+        />
         NVIDIA GPU
       </label>
       <label className='flex items-center gap-2 text-xs'>
-        <input type='checkbox' checked={data.init ?? false} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ init: e.target.checked })} />
+        <input
+          type='checkbox'
+          checked={data.init ?? false}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ init: e.target.checked })}
+        />
         Init (PID 1 reaping)
       </label>
       <label className='flex items-center gap-2 text-xs'>
-        <input type='checkbox' checked={data.readOnly ?? false} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ readOnly: e.target.checked })} />
+        <input
+          type='checkbox'
+          checked={data.readOnly ?? false}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ readOnly: e.target.checked })}
+        />
         Read-only filesystem
       </label>
       <label className='flex items-center gap-2 text-xs'>
-        <input type='checkbox' checked={data.exposeHostDocker ?? false} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ exposeHostDocker: e.target.checked })} />
+        <input
+          type='checkbox'
+          checked={data.exposeHostDocker ?? false}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ exposeHostDocker: e.target.checked })}
+        />
         Expose host docker
       </label>
       <label className='flex items-center gap-2 text-xs'>
-        <input type='checkbox' checked={data.copyDockerBinaries ?? false} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ copyDockerBinaries: e.target.checked })} />
+        <input
+          type='checkbox'
+          checked={data.copyDockerBinaries ?? false}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ copyDockerBinaries: e.target.checked })}
+        />
         Copy docker binaries
       </label>
       <div className='flex flex-col gap-1'>
         <Label>group_add (comma-separated)</Label>
-        <Input value={data.groupAdd ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ groupAdd: e.target.value })} />
+        <Input
+          value={data.groupAdd ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ groupAdd: e.target.value })}
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>security_opt (one per line)</Label>
         <Textarea
           value={data.securityOpts ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateData({ securityOpts: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateData({ securityOpts: e.target.value })}
           placeholder='no-new-privileges:true'
           className='font-mono text-xs min-h-[40px]'
         />
@@ -807,7 +993,7 @@ export function ApplicationInspector({ nodeId, data, updateData }: { nodeId: str
         <Label>tmpfs (one per line)</Label>
         <Textarea
           value={data.tmpfs ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateData({ tmpfs: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateData({ tmpfs: e.target.value })}
           placeholder={'/tmp\n/var/run/postgresql'}
           className='font-mono text-xs min-h-[40px]'
         />
@@ -816,20 +1002,24 @@ export function ApplicationInspector({ nodeId, data, updateData }: { nodeId: str
         <Label>devices (one per line, host:container)</Label>
         <Textarea
           value={data.devices ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateData({ devices: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateData({ devices: e.target.value })}
           placeholder={'/dev/kvm\n/dev/dri:/dev/dri'}
           className='font-mono text-xs min-h-[40px]'
         />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Log driver (optional, e.g. json-file)</Label>
-        <Input value={data.logDriver ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ logDriver: e.target.value })} placeholder='json-file' />
+        <Input
+          value={data.logDriver ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ logDriver: e.target.value })}
+          placeholder='json-file'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Log options (one per line, KEY=VALUE)</Label>
         <Textarea
           value={data.logOpts ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateData({ logOpts: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateData({ logOpts: e.target.value })}
           placeholder={'max-size=50m\nmax-file=7'}
           className='font-mono text-xs min-h-[40px]'
         />
@@ -840,52 +1030,87 @@ export function ApplicationInspector({ nodeId, data, updateData }: { nodeId: str
         <Label>Test Command</Label>
         <Input
           value={data.healthcheckTest ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ healthcheckTest: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ healthcheckTest: e.target.value })}
           placeholder='curl -f http://localhost/health'
         />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Interval</Label>
-        <Input value={data.healthcheckInterval ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ healthcheckInterval: e.target.value })} placeholder='30s' />
+        <Input
+          value={data.healthcheckInterval ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ healthcheckInterval: e.target.value })}
+          placeholder='30s'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Timeout</Label>
-        <Input value={data.healthcheckTimeout ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ healthcheckTimeout: e.target.value })} placeholder='5s' />
+        <Input
+          value={data.healthcheckTimeout ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ healthcheckTimeout: e.target.value })}
+          placeholder='5s'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Retries</Label>
         <Input
           type='number'
           value={data.healthcheckRetries ?? 0}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ healthcheckRetries: Number(e.target.value) || 0 })}
+          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+            updateData({ healthcheckRetries: Number(e.target.value) || 0 })
+          }
           placeholder='3'
         />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Start Period</Label>
-        <Input value={data.healthcheckStartPeriod ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ healthcheckStartPeriod: e.target.value })} placeholder='20s' />
+        <Input
+          value={data.healthcheckStartPeriod ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ healthcheckStartPeriod: e.target.value })}
+          placeholder='20s'
+        />
       </div>
 
       <Label className='text-xs font-semibold mt-2'>Traefik Proxy</Label>
       <div className='flex flex-col gap-1'>
         <Label>Domain</Label>
-        <Input value={data.proxyDomain ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ proxyDomain: e.target.value })} placeholder='app.example.com' />
+        <Input
+          value={data.proxyDomain ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ proxyDomain: e.target.value })}
+          placeholder='app.example.com'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Entrypoint</Label>
-        <Input value={data.proxyEntrypoint ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ proxyEntrypoint: e.target.value })} placeholder='websecure' />
+        <Input
+          value={data.proxyEntrypoint ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ proxyEntrypoint: e.target.value })}
+          placeholder='websecure'
+        />
       </div>
       <div className='flex flex-col gap-1'>
         <Label>Service Port</Label>
-        <Input type='number' value={data.proxyPort ?? 0} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ proxyPort: Number(e.target.value) || 0 })} placeholder='80' />
+        <Input
+          type='number'
+          value={data.proxyPort ?? 0}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ proxyPort: Number(e.target.value) || 0 })}
+          placeholder='80'
+        />
       </div>
       <label className='flex items-center gap-2 text-xs'>
-        <input type='checkbox' checked={data.proxyTls ?? false} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ proxyTls: e.target.checked })} />
+        <input
+          type='checkbox'
+          checked={data.proxyTls ?? false}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ proxyTls: e.target.checked })}
+        />
         TLS (letsencrypt)
       </label>
       <div className='flex flex-col gap-1'>
         <Label>Basic Auth (user:hash)</Label>
-        <Input value={data.proxyBasicAuth ?? ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ proxyBasicAuth: e.target.value })} placeholder='admin:$apr1$...' />
+        <Input
+          value={data.proxyBasicAuth ?? ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ proxyBasicAuth: e.target.value })}
+          placeholder='admin:$apr1$...'
+        />
       </div>
 
       <Label className='text-xs font-semibold mt-2'>Labels</Label>
@@ -893,7 +1118,7 @@ export function ApplicationInspector({ nodeId, data, updateData }: { nodeId: str
         <Label>Custom labels (one per line, KEY=VALUE)</Label>
         <Textarea
           value={data.labels ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateData({ labels: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateData({ labels: e.target.value })}
           placeholder={'traefik.http.routers.foo.service=api@internal\ncom.example.role=worker'}
           className='font-mono text-xs min-h-[60px]'
         />
@@ -915,8 +1140,7 @@ function useDockerConnection(nodeId: string) {
   const ctx = useNodeContext<DockerContext>(nodeId, 'docker-in')
   if (!ctx?.value) return null
   const ctxValue = ctx.value
-  const ctxName = ctxValue.contextName as string | undefined
-  return { ctxValue, ctxName }
+  return { ctxValue, ctxName: ctxValue.contextName }
 }
 
 function resolveContainerName(data: AppData, nodeId: string): string {
@@ -937,9 +1161,9 @@ function buildDockerConnection(ctxValue: DockerContext, args: string[]) {
     return {
       type: 'ssh' as const,
       config: {
-        host: ctxValue.host,
+        host: ctxValue.host ?? '',
         port: ctxValue.port,
-        username: ctxValue.username,
+        username: ctxValue.username ?? '',
         password: ctxValue.password,
         keyPath: ctxValue.keyPath,
         command: ['docker', ...args].join(' '),
@@ -988,7 +1212,14 @@ function shellHeader(container: ContainerInfo, shell: ShellStatus): HeaderState 
  * one. The inspected instance is named rather than identified, so it is resolved against the
  * Docker node's container list before any shell is opened.
  */
-export function ApplicationTerminalTab({ nodeId, data }: { nodeId: string; data: AppData; updateData: (p: Partial<AppData>) => void }) {
+export function ApplicationTerminalTab({
+  nodeId,
+  data,
+}: {
+  nodeId: string
+  data: AppData
+  updateData: (p: Partial<AppData>) => void
+}) {
   const dockerConn = useDockerConnection(nodeId)
   const dockerNodeId = useDockerNodeId(nodeId)
   const inspected = useInspectedContainer(nodeId, data)
@@ -1000,15 +1231,26 @@ export function ApplicationTerminalTab({ nodeId, data }: { nodeId: string; data:
   }
   const container = containers.find((c) => c.id === inspected || c.name === inspected)
   if (!container) {
-    return <ApplicationEmpty nodeId={nodeId} data={data} reason={snapshotReceived ? 'no-container' : 'checking'} subject='shell' container={inspected} />
+    return (
+      <ApplicationEmpty
+        nodeId={nodeId}
+        data={data}
+        reason={snapshotReceived ? 'no-container' : 'checking'}
+        subject='shell'
+        container={inspected}
+      />
+    )
   }
-  const connection = buildDockerConnection(dockerConn.ctxValue, dockerArgs(dockerConn.ctxName, 'exec', '-it', container.id, 'bash'))
+  const connection = buildDockerConnection(
+    dockerConn.ctxValue,
+    dockerArgs(dockerConn.ctxName, 'exec', '-it', container.id, 'bash'),
+  )
   const sessionKey = `${nodeId}:${container.id}`
   return (
     <div className='flex flex-col h-full'>
       <OutputHeader {...shellHeader(container, shell)} />
       <div className='flex-1 min-h-0'>
-        <InspectorTerminalBody key={sessionKey} sessionKey={sessionKey} connection={connection} onStatusChange={setShell} />
+        <Terminal key={sessionKey} sessionKey={sessionKey} connection={connection} onStatusChange={setShell} />
       </div>
     </div>
   )
@@ -1119,18 +1361,18 @@ export function ApplicationVolumesTab({
             </SelectContent>
           </Select>
           <Button variant='ghost' size='sm' className='h-7 text-[10px] px-1.5' onClick={refresh} disabled={loading}>
-            <icons.RotateCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+            <RotateCw className={cn('h-3 w-3', loading && 'animate-spin')} />
           </Button>
         </div>
         <Input
           value={pickSubpath}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPickSubpath(e.target.value)}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setPickSubpath(e.target.value)}
           placeholder='subpath (optional)'
           className='h-7 text-xs w-full font-mono'
         />
         <Input
           value={pickPath}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPickPath(e.target.value)}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setPickPath(e.target.value)}
           placeholder='/container/path'
           className='h-7 text-xs w-full font-mono'
         />
@@ -1140,7 +1382,7 @@ export function ApplicationVolumesTab({
               <input
                 type='checkbox'
                 checked={pickReadOnly}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPickReadOnly(e.target.checked)}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setPickReadOnly(e.target.checked)}
               />
               readonly
             </label>
@@ -1151,12 +1393,18 @@ export function ApplicationVolumesTab({
               <input
                 type='checkbox'
                 checked={pickDirectMount}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPickDirectMount(e.target.checked)}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setPickDirectMount(e.target.checked)}
               />
               direct mount
             </label>
           </div>
-          <Button variant='outline' size='sm' className='h-7 text-xs' onClick={attach} disabled={!pickVolume || !pickPath.trim()}>
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-7 text-xs'
+            onClick={attach}
+            disabled={!pickVolume || !pickPath.trim()}
+          >
             Attach
           </Button>
         </div>
@@ -1175,7 +1423,7 @@ export function ApplicationVolumesTab({
                   name={a.volumeName}
                   created={info?.created ?? ''}
                   subtitle={`${subpathDisplay} → ${a.containerPath}${a.readOnly ? ' (readonly)' : ''}${a.directMount ? ' (direct)' : ''}`}
-                  action={{ icon: icons.Unlink, label: 'Detach', onClick: () => detach(a.volumeName, a.containerPath) }}
+                  action={{ icon: Unlink, label: 'Detach', onClick: () => detach(a.volumeName, a.containerPath) }}
                 />
               )
             })}

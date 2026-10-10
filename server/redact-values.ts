@@ -26,7 +26,16 @@ const TOKEN_RUN = new RegExp(`[A-Za-z0-9+/_.~-]{${MIN_PREFIX_LENGTH},}`, 'g')
 // The shortest base64 run that could carry a matchable value: four characters per three bytes.
 const MIN_BASE64_RUN = Math.ceil(MIN_VALUE_LENGTH / 3) * 4
 
-const JSON_ESCAPES: Record<string, string> = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', '"': '"', '\\': '\\', '/': '/' }
+const JSON_ESCAPES: Record<string, string> = {
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  b: '\b',
+  f: '\f',
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+}
 
 /**
  * An encoding this module can reverse. `pattern` finds runs that could be encoded text — it is
@@ -69,7 +78,9 @@ function decodePercent(run: string): string | null {
   } catch {
     // A stray `%`, or escapes that are not valid UTF-8, make decodeURIComponent throw. Decoding
     // byte-wise still recognises an ASCII credential, which is what matters here.
-    const decoded = run.replace(/%[0-9A-Fa-f]{2}/g, (escape) => String.fromCharCode(Number.parseInt(escape.slice(1), 16)))
+    const decoded = run.replace(/%[0-9A-Fa-f]{2}/g, (percentEscape) =>
+      String.fromCharCode(Number.parseInt(percentEscape.slice(1), 16)),
+    )
     return decoded === run ? null : decoded
   }
 }

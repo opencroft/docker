@@ -1,4 +1,4 @@
-import { terminal } from '@opencroft/server'
+import { terminal } from '@opencroft/server/terminal'
 
 import type { LogView } from '../log-view'
 import {
@@ -51,7 +51,10 @@ async function followView(spec: JobSpec): Promise<LogView> {
 // Text that is already redacted, printed as a session that ends at once. The same terminal shows
 // it, and the ended session keeps it for a watcher arriving a moment later.
 async function printedView(text: string): Promise<LogView> {
-  const job = await terminal.startJob({ type: 'local' }, { command: 'cat', stdin: text, stopWhenUnwatchedMs: VIEW_UNWATCHED_MS })
+  const job = await terminal.startJob(
+    { type: 'local' },
+    { command: 'cat', stdin: text, stopWhenUnwatchedMs: VIEW_UNWATCHED_MS },
+  )
   return { sessionKey: job.sessionKey, live: false }
 }
 
@@ -99,7 +102,9 @@ export async function watchContainerLogs(params: WatchLogsParams): Promise<LogVi
   checkContainerRef(container)
   const spec = await containerLogsSpec(dockerNodeId, container, follow)
   if (!spec) {
-    return printedView(await dockerServiceLogs({ dockerNodeId, service: '', containerId: container, tail: LOGS_TAIL_LINES }))
+    return printedView(
+      await dockerServiceLogs({ dockerNodeId, service: '', containerId: container, tail: LOGS_TAIL_LINES }),
+    )
   }
   return follow ? followView(spec) : { sessionKey: await startRedactedJob(spec), live: false }
 }

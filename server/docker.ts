@@ -1,10 +1,11 @@
-import host from '@ext/host'
-import { type ExecResult, ssh, type TerminalContext, terminal } from '@opencroft/server'
+import { graph } from '@opencroft/server/graph'
+import { storage } from '@opencroft/server/storage'
+import { type ExecResult, ssh, type TerminalContext, terminal } from '@opencroft/server/terminal'
 import * as yaml from 'js-yaml'
 
 import { type LifecycleVerb, verbApplies } from '../container-lifecycle'
-import { type AttachedVolume, parseNamedVolumes } from '../named-volumes'
 import type { DeployAction, DeployLogEntry, DeployStatus } from '../deploy-log'
+import { type AttachedVolume, parseNamedVolumes } from '../named-volumes'
 import { deployFollowScript } from './deploy-follow'
 import { redactSecrets } from './redact'
 import { MIN_VALUE_LENGTH } from './redact-values'
@@ -29,7 +30,7 @@ interface DockerNodeData {
 }
 
 function buildDockerHost(target: TerminalContext | undefined): string | undefined {
-  if (!target || target.type !== 'ssh' || !target.host) {
+  if (target?.type !== 'ssh' || !target.host) {
     return undefined
   }
   const user = (target.username as string) || 'root'
@@ -38,7 +39,7 @@ function buildDockerHost(target: TerminalContext | undefined): string | undefine
 }
 
 async function resolveDockerContext(dockerNodeId: string): Promise<DockerContext> {
-  const node = await host.graph.getNode(dockerNodeId)
+  const node = await graph.getNode(dockerNodeId)
   if (!node) {
     throw new Error(`Docker node ${dockerNodeId} not found`)
   }
@@ -75,7 +76,7 @@ async function resolveTargetKey(keyPath: string): Promise<string> {
   if (!content) {
     throw new Error(`Unable to resolve key for docker context: ${keyPath}`)
   }
-  return content.endsWith('\n') ? content : content + '\n'
+  return content.endsWith('\n') ? content : `${content}\n`
 }
 
 // Heredoc delimiter for stdin-fed compose invocations. Contains '_', which the base64 alphabet
@@ -198,6 +199,7 @@ async function probeDockerSocket(ctx: DockerContext): Promise<string | undefined
     // A DOCKER_HOST that is not a unix socket (tcp://, ssh://) names a daemon this probe cannot
     // express as a socket path. Reporting nothing leaves the call on whatever it already used;
     // reporting it would produce `unix://tcp://…` and cache that for every later call on the node.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion in the script text, not a JS placeholder
     'if [ -n "$DOCKER_HOST" ]; then case "$DOCKER_HOST" in unix://*) printf %s "${DOCKER_HOST#unix://}"; exit 0;; *) exit 1;; esac; fi',
     'sock="/run/user/$(id -u)/docker.sock"',
     'if [ -S "$sock" ]; then printf %s "$sock"; exit 0; fi',
@@ -228,11 +230,16 @@ function combinedOutput(result: ExecResult): string {
 }
 
 // The context a call actually uses: the node's own, or — for a plain local daemon whose socket an
-// earlier call had to detect — that socket. `canDetect` says whether detection applies at all.
-function withDetectedSocket(ctx: DockerContext): { canDetect: boolean; cached?: string; effectiveCtx: DockerContext } {
-  const canDetect = !ctx.dockerHost && !ctx.contextName && Boolean(ctx.dockerNodeId)
-  const cached = canDetect ? detectedSocketCache.get(ctx.dockerNodeId!) : undefined
-  return { canDetect, cached, effectiveCtx: cached ? { ...ctx, dockerHost: `unix://${cached}` } : ctx }
+// earlier call had to detect — that socket. `detectFor` is the Docker node whose socket detection
+// applies to, and is absent when detection does not apply at all.
+function withDetectedSocket(ctx: DockerContext): {
+  detectFor?: string
+  cached?: string
+  effectiveCtx: DockerContext
+} {
+  const detectFor = !ctx.dockerHost && !ctx.contextName ? ctx.dockerNodeId || undefined : undefined
+  const cached = detectFor ? detectedSocketCache.get(detectFor) : undefined
+  return { detectFor, cached, effectiveCtx: cached ? { ...ctx, dockerHost: `unix://${cached}` } : ctx }
 }
 
 // A docker call that retries on a detected socket when the plain call could not connect, and never
@@ -246,16 +253,16 @@ async function dockerCmdResult(
   env?: Record<string, string>,
   mergeStderr?: boolean,
 ): Promise<ExecResult> {
-  const { canDetect, cached, effectiveCtx } = withDetectedSocket(ctx)
+  const { detectFor, cached, effectiveCtx } = withDetectedSocket(ctx)
   const result = await runDockerCmd(effectiveCtx, args, stdin, env, mergeStderr)
-  if (result.exitCode === 0 || !canDetect || cached || !isSocketConnectionError(result.stderr)) {
+  if (result.exitCode === 0 || !detectFor || cached || !isSocketConnectionError(result.stderr)) {
     return result
   }
   const detected = await probeDockerSocket(ctx)
   if (!detected) {
     return result
   }
-  detectedSocketCache.set(ctx.dockerNodeId!, detected)
+  detectedSocketCache.set(detectFor, detected)
   return runDockerCmd({ ...ctx, dockerHost: `unix://${detected}` }, args, stdin, env, mergeStderr)
 }
 
@@ -276,7 +283,9 @@ async function dockerCmd(
 // "found orphan containers" warning that per-service docs would otherwise trigger for every
 // sibling service in the shared project.
 async function composeCmd(ctx: DockerContext, content: string, args: string[]): Promise<ExecResult> {
-  return dockerCmdResult(ctx, ['compose', '-f', '-', '-p', COMPOSE_PROJECT, ...args], content, { COMPOSE_IGNORE_ORPHANS: '1' })
+  return dockerCmdResult(ctx, ['compose', '-f', '-', '-p', COMPOSE_PROJECT, ...args], content, {
+    COMPOSE_IGNORE_ORPHANS: '1',
+  })
 }
 
 // List container IDs belonging to the shared compose project (optionally narrowed to one
@@ -375,7 +384,9 @@ function scrubStrings(node: unknown, scrub: (text: string) => string): unknown {
     return node.map((item) => scrubStrings(item, scrub))
   }
   if (node !== null && typeof node === 'object') {
-    return Object.fromEntries(Object.entries(node as Record<string, unknown>).map(([k, v]) => [k, scrubStrings(v, scrub)]))
+    return Object.fromEntries(
+      Object.entries(node as Record<string, unknown>).map(([k, v]) => [k, scrubStrings(v, scrub)]),
+    )
   }
   return node
 }
@@ -463,7 +474,7 @@ async function recordDeployLog(
       status: state?.status ?? 'finished',
       ...(state?.exitCode === undefined ? {} : { exitCode: state.exitCode }),
     }
-    await host.storage.set(deployLogStorageKey(applicationNodeId), entry)
+    await storage.set(deployLogStorageKey(applicationNodeId), entry)
   } catch (err) {
     console.error(`[docker.deployLog] failed to store deploy log for ${applicationNodeId}:`, err)
   }
@@ -641,7 +652,7 @@ async function pollDeployRun(state: DeployRunState): Promise<{ text: string; exi
 // one's result, nor its marker deleted.
 async function finaliseDeployRun(state: DeployRunState, text: string, exitCode: number): Promise<void> {
   const key = deployRunStorageKey(state.applicationNodeId)
-  const current = await host.storage.get<DeployRunState>(key)
+  const current = await storage.get<DeployRunState>(key)
   if (!current || current.startedAt !== state.startedAt) {
     return
   }
@@ -650,7 +661,7 @@ async function finaliseDeployRun(state: DeployRunState, text: string, exitCode: 
     exitCode,
     at: state.startedAt,
   })
-  await host.storage.delete(key)
+  await storage.delete(key)
   invalidatePs(state.dockerNodeId)
 }
 
@@ -675,7 +686,7 @@ export async function getDeployLog(applicationNodeId: string): Promise<DeployLog
   // live from the target and returned WITHOUT being stored (see pollDeployRun for why); the read
   // that finds the exit code finalises it. Best-effort: an unreachable target shows the entry
   // stored so far rather than an error.
-  const run = await host.storage.get<DeployRunState>(deployRunStorageKey(applicationNodeId))
+  const run = await storage.get<DeployRunState>(deployRunStorageKey(applicationNodeId))
   if (run) {
     try {
       const live = await pollDeployRun(run)
@@ -687,7 +698,7 @@ export async function getDeployLog(applicationNodeId: string): Promise<DeployLog
       console.error(`[docker.deployLog] failed to read detached deploy for ${applicationNodeId}:`, err)
     }
   }
-  const entry = await host.storage.get<DeployLogEntry>(deployLogStorageKey(applicationNodeId))
+  const entry = await storage.get<DeployLogEntry>(deployLogStorageKey(applicationNodeId))
   return entry ? { ...entry, text: await redactSecrets(entry.text) } : null
 }
 
@@ -716,7 +727,7 @@ function canStream(ctx: DockerContext): boolean {
 // unreachable target leaves the run standing: its end is not known yet, and the next call asks
 // again.
 async function activeDeployRun(applicationNodeId: string): Promise<DeployRunState | null> {
-  const run = await host.storage.get<DeployRunState>(deployRunStorageKey(applicationNodeId))
+  const run = await storage.get<DeployRunState>(deployRunStorageKey(applicationNodeId))
   if (!run) {
     return null
   }
@@ -736,7 +747,7 @@ async function activeDeployRun(applicationNodeId: string): Promise<DeployRunStat
 /** The last deploy's entry without its text — what the Deploy tab's header shows — or null. */
 export async function deployStatus(applicationNodeId: string): Promise<Omit<DeployLogEntry, 'text'> | null> {
   await activeDeployRun(applicationNodeId)
-  const entry = await host.storage.get<DeployLogEntry>(deployLogStorageKey(applicationNodeId))
+  const entry = await storage.get<DeployLogEntry>(deployLogStorageKey(applicationNodeId))
   if (!entry) {
     return null
   }
@@ -797,14 +808,25 @@ export async function containerLogState(dockerNodeId: string, container: string)
  * dockerUp's does: a rootless socket is found by a call that failed on the default one, and a
  * streamed command cannot be retried.
  */
-export async function containerLogsSpec(dockerNodeId: string, container: string, follow: boolean): Promise<JobSpec | null> {
+export async function containerLogsSpec(
+  dockerNodeId: string,
+  container: string,
+  follow: boolean,
+): Promise<JobSpec | null> {
   const ctx = await resolveDockerContext(dockerNodeId)
   if (!canStream(ctx)) {
     return null
   }
   stdoutOrThrow(await dockerCmdResult(ctx, ['version', '--format', '{{.Server.Version}}']))
   const { effectiveCtx } = withDetectedSocket(ctx)
-  const args = [...dockerHostArgs(effectiveCtx), 'logs', ...(follow ? ['-f'] : []), '--tail', String(LOGS_TAIL_LINES), container]
+  const args = [
+    ...dockerHostArgs(effectiveCtx),
+    'logs',
+    ...(follow ? ['-f'] : []),
+    '--tail',
+    String(LOGS_TAIL_LINES),
+    container,
+  ]
   return {
     ctx: effectiveCtx,
     command: 'docker',
@@ -1781,17 +1803,25 @@ export async function dockerUp(params: DockerUpParams, signal?: AbortSignal): Pr
 
   // Stored BEFORE the spawn: a deploy whose marker was never written is a deploy nothing will ever
   // read the output of, and the spawn is the step that can leave a build running.
-  await host.storage.set(deployRunStorageKey(params.applicationNodeId), state)
-  await recordDeployLog(params.applicationNodeId, 'start', `${header}\nStarting…\n`, { status: 'running', at: startedAt })
+  await storage.set(deployRunStorageKey(params.applicationNodeId), state)
+  await recordDeployLog(params.applicationNodeId, 'start', `${header}\nStarting…\n`, {
+    status: 'running',
+    at: startedAt,
+  })
   try {
     await terminal.exec(effectiveCtx, detachedDeployScript(inner, paths))
   } catch (err) {
-    await host.storage.delete(deployRunStorageKey(params.applicationNodeId))
-    await recordDeployLog(params.applicationNodeId, 'start', `${header}\nFailed to start the deploy: ${String(err)}\n`, {
-      status: 'finished',
-      exitCode: 1,
-      at: startedAt,
-    })
+    await storage.delete(deployRunStorageKey(params.applicationNodeId))
+    await recordDeployLog(
+      params.applicationNodeId,
+      'start',
+      `${header}\nFailed to start the deploy: ${String(err)}\n`,
+      {
+        status: 'finished',
+        exitCode: 1,
+        at: startedAt,
+      },
+    )
     throw err
   }
 
@@ -1867,7 +1897,9 @@ export async function dockerDown(params: DockerDownParams): Promise<void> {
     await dockerCmd(ctx, ['stop', ...ids])
     await dockerCmd(ctx, ['rm', '-f', ...ids])
   }
-  const networkIds = (await dockerCmd(ctx, ['network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${COMPOSE_PROJECT}`]))
+  const networkIds = (
+    await dockerCmd(ctx, ['network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${COMPOSE_PROJECT}`])
+  )
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)

@@ -1,5 +1,6 @@
-import { invoke, React } from '@ext/host'
-import { InspectorTerminalBody } from '@ext/ui'
+import { invoke } from '@opencroft/client/actions'
+import { Terminal } from '@opencroft/client/terminal'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { DeployLogEntry } from '../../deploy-log'
 import type { LogView } from '../../log-view'
@@ -16,8 +17,6 @@ import { createViewSlot, type ViewSlot } from './view-slot'
 // Each view the server starts holds one of its job slots until it is closed, so a tab hands every
 // view it opens to its ViewSlot, which closes it as soon as the tab is done with it.
 
-const { useCallback, useEffect, useRef, useState } = React
-
 // How often a tab re-reads the state its header shows.
 const STATE_POLL_MS = 3000
 
@@ -26,18 +25,26 @@ const STATE_POLL_MS = 3000
  * session is the server's — and a session that ends is the end of the output, not a fault, so it
  * leaves what it showed on screen and reports the end through `onEnded`.
  */
-function OutputTab({ header, view, onEnded }: { header: HeaderState; view: LogView | null; onEnded: (view: LogView) => void }) {
+function OutputTab({
+  header,
+  view,
+  onEnded,
+}: {
+  header: HeaderState
+  view: LogView | null
+  onEnded: (view: LogView) => void
+}) {
   return (
     <div className='flex flex-col h-full'>
       <OutputHeader {...header} />
       {view ? (
         <div className='flex-1 min-h-0'>
-          <InspectorTerminalBody
+          <Terminal
             key={view.sessionKey}
             attachKey={view.sessionKey}
             logView
             readOnly
-            onStatusChange={(status: string) => {
+            onStatusChange={(status) => {
               if (status === 'disconnected') {
                 onEnded(view)
               }
@@ -101,18 +108,34 @@ function deployHeader(status: DeployStatus, watch: DeployWatch | null): HeaderSt
   const reboot = status.action === 'restart'
   const when = new Date(status.at).toLocaleString()
   if (status.status === 'running') {
-    const notLive = watch?.view && !watch.view.live ? ' · not live: this Docker context cannot stream, so this refreshes every few seconds' : ''
+    const notLive =
+      watch?.view && !watch.view.live
+        ? ' · not live: this Docker context cannot stream, so this refreshes every few seconds'
+        : ''
     return { indicator: 'warning', title: reboot ? 'Rebooting…' : 'Deploying…', detail: `started ${when}${notLive}` }
   }
   const truncated = status.truncated ? ' · earlier output cut' : ''
   if (status.exitCode !== undefined && status.exitCode !== 0) {
-    return { indicator: 'destructive', title: `${reboot ? 'Reboot' : 'Deploy'} failed · exit ${status.exitCode}`, detail: `${when}${truncated}` }
+    return {
+      indicator: 'destructive',
+      title: `${reboot ? 'Reboot' : 'Deploy'} failed · exit ${status.exitCode}`,
+      detail: `${when}${truncated}`,
+    }
   }
   return { indicator: 'success', title: reboot ? 'Rebooted' : 'Deployed', detail: `${when}${truncated}` }
 }
 
-export function ApplicationDeployTab({ nodeId, data }: { nodeId: string; data: AppData; updateData: (p: Partial<AppData>) => void }) {
-  const [status, setStatus] = useState<{ kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; status: DeployStatus | null }>({
+export function ApplicationDeployTab({
+  nodeId,
+  data,
+}: {
+  nodeId: string
+  data: AppData
+  updateData: (p: Partial<AppData>) => void
+}) {
+  const [status, setStatus] = useState<
+    { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; status: DeployStatus | null }
+  >({
     kind: 'loading',
   })
   const [watch, setWatch] = useState<DeployWatch | null>(null)
@@ -121,7 +144,10 @@ export function ApplicationDeployTab({ nodeId, data }: { nodeId: string; data: A
 
   const readStatus = useCallback(async () => {
     try {
-      setStatus({ kind: 'ready', status: await invoke<DeployStatus | null>('docker.deployStatus', { applicationNodeId: nodeId }) })
+      setStatus({
+        kind: 'ready',
+        status: await invoke<DeployStatus | null>('docker.deployStatus', { applicationNodeId: nodeId }),
+      })
     } catch (err) {
       setStatus({ kind: 'error', message: errorMessage(err) })
     }
@@ -177,7 +203,12 @@ export function ApplicationDeployTab({ nodeId, data }: { nodeId: string; data: A
   if (status.kind === 'error') {
     return (
       <OutputTab
-        header={{ indicator: 'destructive', title: 'Could not read the deploy', detail: status.message, action: { label: 'Retry', onClick: readStatus } }}
+        header={{
+          indicator: 'destructive',
+          title: 'Could not read the deploy',
+          detail: status.message,
+          action: { label: 'Retry', onClick: readStatus },
+        }}
         view={null}
         onEnded={() => {}}
       />
@@ -186,10 +217,14 @@ export function ApplicationDeployTab({ nodeId, data }: { nodeId: string; data: A
   if (!current) {
     return <ApplicationEmpty nodeId={nodeId} data={data} reason='not-deployed' subject='output' />
   }
-  const header: HeaderState =
-    watchError
-      ? { indicator: 'destructive', title: 'Could not open the output', detail: watchError, action: { label: 'Retry', onClick: () => setWatchError(null) } }
-      : deployHeader(current, watch)
+  const header: HeaderState = watchError
+    ? {
+        indicator: 'destructive',
+        title: 'Could not open the output',
+        detail: watchError,
+        action: { label: 'Retry', onClick: () => setWatchError(null) },
+      }
+    : deployHeader(current, watch)
   const shown = watch && watch.at === current.at ? watch : null
   // A follow ends when its deploy does, a moment before the status says so. Reading the status
   // first means that end is seen as a finished deploy, and only a follow lost mid-deploy reopens.
@@ -214,16 +249,36 @@ interface LogsWatch {
   ended: boolean
 }
 
-export function ApplicationLogsTab({ nodeId, data }: { nodeId: string; data: AppData; updateData: (p: Partial<AppData>) => void }) {
+export function ApplicationLogsTab({
+  nodeId,
+  data,
+}: {
+  nodeId: string
+  data: AppData
+  updateData: (p: Partial<AppData>) => void
+}) {
   const dockerNodeId = useDockerNodeId(nodeId)
   const container = useInspectedContainer(nodeId, data)
   if (!dockerNodeId) {
     return <ApplicationEmpty nodeId={nodeId} data={data} reason='no-docker' subject='logs' />
   }
-  return <ContainerLogs key={`${dockerNodeId}:${container}`} nodeId={nodeId} data={data} dockerNodeId={dockerNodeId} container={container} />
+  return (
+    <ContainerLogs
+      key={`${dockerNodeId}:${container}`}
+      nodeId={nodeId}
+      data={data}
+      dockerNodeId={dockerNodeId}
+      container={container}
+    />
+  )
 }
 
-function logsHeader(container: string, state: ContainerState, watch: LogsWatch | null, reopen: () => void): HeaderState {
+function logsHeader(
+  container: string,
+  state: ContainerState,
+  watch: LogsWatch | null,
+  reopen: () => void,
+): HeaderState {
   if (state.state === 'stopped') {
     return { indicator: 'secondary', title: 'Stopped', detail: `${container} · ${state.status} · its last lines` }
   }
@@ -236,12 +291,27 @@ function logsHeader(container: string, state: ContainerState, watch: LogsWatch |
     }
   }
   if (watch?.follow && watch.ended) {
-    return { indicator: 'destructive', title: 'Log stream ended', detail: `${container} is still running`, action: { label: 'Reconnect', onClick: reopen } }
+    return {
+      indicator: 'destructive',
+      title: 'Log stream ended',
+      detail: `${container} is still running`,
+      action: { label: 'Reconnect', onClick: reopen },
+    }
   }
   return { indicator: 'success', title: 'Live', detail: container }
 }
 
-function ContainerLogs({ nodeId, data, dockerNodeId, container }: { nodeId: string; data: AppData; dockerNodeId: string; container: string }) {
+function ContainerLogs({
+  nodeId,
+  data,
+  dockerNodeId,
+  container,
+}: {
+  nodeId: string
+  data: AppData
+  dockerNodeId: string
+  container: string
+}) {
   const [state, setState] = useState<ContainerState | null>(null)
   const [stateError, setStateError] = useState<string | null>(null)
   const [watch, setWatch] = useState<LogsWatch | null>(null)
@@ -273,6 +343,7 @@ function ContainerLogs({ nodeId, data, dockerNodeId, container }: { nodeId: stri
 
   const follow = state?.state === 'running'
   const hasLog = state?.state === 'running' || state?.state === 'stopped'
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is Reopen's counter; changing it is what opens a new view
   useEffect(() => {
     if (!hasLog) {
       slot.release()
@@ -298,11 +369,29 @@ function ContainerLogs({ nodeId, data, dockerNodeId, container }: { nodeId: stri
 
   let header: HeaderState
   if (stateError) {
-    header = { indicator: 'destructive', title: 'Cannot reach Docker', detail: stateError, action: { label: 'Retry', onClick: readState } }
+    header = {
+      indicator: 'destructive',
+      title: 'Cannot reach Docker',
+      detail: stateError,
+      action: { label: 'Retry', onClick: readState },
+    }
   } else if (!state || state.state === 'missing') {
-    return <ApplicationEmpty nodeId={nodeId} data={data} reason={state ? 'no-container' : 'checking'} subject='logs' container={container} />
+    return (
+      <ApplicationEmpty
+        nodeId={nodeId}
+        data={data}
+        reason={state ? 'no-container' : 'checking'}
+        subject='logs'
+        container={container}
+      />
+    )
   } else if (watchError && hasLog) {
-    header = { indicator: 'destructive', title: 'Could not open the log', detail: watchError, action: { label: 'Retry', onClick: reopen } }
+    header = {
+      indicator: 'destructive',
+      title: 'Could not open the log',
+      detail: watchError,
+      action: { label: 'Retry', onClick: reopen },
+    }
   } else {
     header = logsHeader(container, state, watch, reopen)
   }

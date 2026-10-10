@@ -1,5 +1,13 @@
-import { icons } from '@ext/host'
-import { Button, Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@ext/ui'
+import {
+  Button,
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@opencroft/client/ui'
+import { Container, LoaderCircle, Rocket, Unplug } from 'lucide-react'
 
 import { type AppData, deployBlocker, useDockerNodeId, useNodeActionRunner } from './application'
 
@@ -19,7 +27,7 @@ function DeployButton({ nodeId }: { nodeId: string }) {
   const { busy, runAction } = useNodeActionRunner(nodeId)
   return (
     <Button size='sm' onClick={() => runAction('deploy', 'Deploy')} disabled={busy}>
-      <icons.Rocket className='size-3.5' />
+      <Rocket className='size-3.5' />
       {busy ? 'Deploying…' : 'Deploy'}
     </Button>
   )
@@ -46,12 +54,19 @@ export function ApplicationEmpty({
   const what = SUBJECT_TEXT[subject]
   const blocker = deployBlocker(data, Boolean(useDockerNodeId(nodeId)))
   const shown = blocker === 'no-docker' && reason !== 'checking' ? 'no-docker' : reason
-  const deployHint = blocker === 'no-source' ? `Set an image or a build context, then deploy to see ${what} here.` : `Deploy the application to see ${what} here.`
+  const deployHint =
+    blocker === 'no-source'
+      ? `Set an image or a build context, then deploy to see ${what} here.`
+      : `Deploy the application to see ${what} here.`
   const content = {
-    'no-docker': { Icon: icons.Unplug, title: 'No Docker node', description: `Connect a Docker node to the Docker input to see ${what} here.` },
-    'not-deployed': { Icon: icons.Rocket, title: 'Not deployed', description: deployHint },
-    'no-container': { Icon: icons.Container, title: 'No container', description: deployHint },
-    checking: { Icon: icons.LoaderCircle, title: 'Checking…', description: undefined },
+    'no-docker': {
+      Icon: Unplug,
+      title: 'No Docker node',
+      description: `Connect a Docker node to the Docker input to see ${what} here.`,
+    },
+    'not-deployed': { Icon: Rocket, title: 'Not deployed', description: deployHint },
+    'no-container': { Icon: Container, title: 'No container', description: deployHint },
+    checking: { Icon: LoaderCircle, title: 'Checking…', description: undefined },
   }[shown]
   const offerDeploy = blocker === null && (shown === 'not-deployed' || shown === 'no-container')
   return (

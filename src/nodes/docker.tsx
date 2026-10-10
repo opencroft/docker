@@ -1,13 +1,5 @@
-import {
-  InputHandle,
-  icons,
-  invoke,
-  NodeFrame,
-  OutputHandle,
-  React,
-  toast,
-  useNodeContext,
-} from '@ext/host'
+import { invoke } from '@opencroft/client/actions'
+import { InputHandle, NodeFrame, OutputHandle, useNodeContext } from '@opencroft/client/canvas'
 import {
   Button,
   Input,
@@ -18,14 +10,15 @@ import {
   SelectTrigger,
   SelectValue,
   StatusIndicator,
-} from '@ext/ui'
+} from '@opencroft/client/ui'
 import { cn } from 'cn'
+import { Container, Download, Layers, Play, Plus, RotateCw, Square, Trash2, X } from 'lucide-react'
+import { type ChangeEvent, type ComponentType, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 
 import { verbApplies } from '../../container-lifecycle'
 import { useSecretsStoreKeys } from './secrets-store-keys'
 import { VolumeEntryRow } from './volume-entry'
-
-const { useCallback, useEffect, useState } = React
 
 export interface DockerRegistry {
   host: string
@@ -82,6 +75,7 @@ export function DockerNode({ id, data, selected }: { id: string; data: DockerDat
   const host = ctx?.value?.type ?? 'none'
   const [probe, setProbe] = useState<DockerProbeResult | null>(null)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the server's probe reads the node's Context input and context name, so a change to either re-runs it
   useEffect(() => {
     if (!ctx?.value) {
       setProbe(null)
@@ -90,7 +84,7 @@ export function DockerNode({ id, data, selected }: { id: string; data: DockerDat
     setProbe(null)
     invoke<DockerProbeResult>('docker.probe', { dockerNodeId: id })
       .then(setProbe)
-      .catch((err) => setProbe({ ok: false, reason: 'unknown', message: String(err) }))
+      .catch((err: unknown) => setProbe({ ok: false, reason: 'unknown', message: String(err) }))
   }, [id, ctx?.value, target?.value, data.contextName])
 
   const status = probe === null ? 'neutral' : probe.ok ? 'success' : 'error'
@@ -105,7 +99,7 @@ export function DockerNode({ id, data, selected }: { id: string; data: DockerDat
 
   return (
     <NodeFrame
-      icon={icons.Container}
+      icon={Container}
       title='Docker'
       subtitle={subtitle}
       status={status}
@@ -187,16 +181,17 @@ function RegistriesEditor({
   return (
     <div className='flex flex-col gap-2'>
       {value.map((r, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: registries have no id and every field can be empty or repeated while edited; the rows are controlled inputs with no state of their own
         <div key={i} className='flex flex-col gap-1 rounded border p-2'>
           <div className='flex gap-1 items-center'>
             <Label className='text-[10px] w-16 shrink-0'>Host</Label>
             <Input
               value={r.host}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => update(i, { host: e.target.value })}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => update(i, { host: e.target.value })}
               className='h-7 text-xs flex-1 font-mono'
             />
             <Button variant='ghost' size='icon' className='h-7 w-7 shrink-0' onClick={() => remove(i)} title='Remove'>
-              <icons.X className='h-3 w-3' />
+              <X className='h-3 w-3' />
             </Button>
           </div>
           <div className='flex gap-1 items-center'>
@@ -210,7 +205,7 @@ function RegistriesEditor({
         </div>
       ))}
       <Button variant='outline' size='sm' className='h-7 text-xs' onClick={add}>
-        <icons.Plus className='h-3 w-3 mr-1' /> Add Registry
+        <Plus className='h-3 w-3 mr-1' /> Add Registry
       </Button>
     </div>
   )
@@ -230,7 +225,7 @@ export function DockerInspector({
         <Label>Docker Context (optional)</Label>
         <Input
           value={data.contextName ?? ''}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateData({ contextName: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => updateData({ contextName: e.target.value })}
           placeholder='default'
         />
       </div>
@@ -251,7 +246,7 @@ function useDockerReady(nodeId: string) {
 }
 
 interface RowActionProps {
-  icon: React.ComponentType<{ className?: string }>
+  icon: ComponentType<{ className?: string }>
   label: string
   onClick: () => void
   disabled?: boolean
@@ -320,33 +315,41 @@ function ContainerRow({ container, busy, indent, onAction }: ContainerRowProps) 
   return (
     <div className={cn('flex flex-col gap-0.5 pr-2 py-1.5 text-xs', indent ? 'pl-6' : 'pl-2')}>
       <div className='flex items-center gap-1.5'>
-        <StatusIndicator variant={container.running ? 'success' : container.state === 'restarting' || container.state === 'paused' ? 'warning' : 'secondary'} />
+        <StatusIndicator
+          variant={
+            container.running
+              ? 'success'
+              : container.state === 'restarting' || container.state === 'paused'
+                ? 'warning'
+                : 'secondary'
+          }
+        />
         <span className='font-medium truncate flex-1'>{container.name}</span>
         <span className='font-mono text-[10px] text-muted-foreground'>{container.id.slice(0, 12)}</span>
         <div className='flex items-center'>
           {verbApplies('stop', container.state) ? (
             <RowAction
-              icon={icons.Square}
+              icon={Square}
               label='Stop'
               onClick={() => onAction(container.id, 'stopContainer', 'Stop')}
               disabled={busy}
             />
           ) : (
             <RowAction
-              icon={icons.Play}
+              icon={Play}
               label='Start'
               onClick={() => onAction(container.id, 'startContainer', 'Start')}
               disabled={busy || !verbApplies('start', container.state)}
             />
           )}
           <RowAction
-            icon={icons.RotateCw}
+            icon={RotateCw}
             label='Restart'
             onClick={() => onAction(container.id, 'restartContainer', 'Restart')}
             disabled={busy || !verbApplies('reboot', container.state)}
           />
           <RowAction
-            icon={icons.Trash2}
+            icon={Trash2}
             label='Remove'
             onClick={() => onAction(container.id, 'removeContainer', 'Remove')}
             disabled={busy}
@@ -379,17 +382,17 @@ function ImageRow({ image, reference, busy, onPull, onRemove }: ImageRowProps) {
   return (
     <div className='flex flex-col gap-0.5 px-2 py-1.5 text-xs bg-muted/30'>
       <div className='flex items-center gap-1.5'>
-        <icons.Layers className='h-3 w-3 shrink-0 text-muted-foreground' />
+        <Layers className='h-3 w-3 shrink-0 text-muted-foreground' />
         <span className='font-medium truncate flex-1'>{reference || '(untagged)'}</span>
         <span className='font-mono text-[10px] text-muted-foreground'>{image.id.slice(0, 12)}</span>
         <div className='flex items-center'>
           <RowAction
-            icon={icons.Download}
+            icon={Download}
             label='Pull'
             onClick={() => onPull(image.id, reference)}
             disabled={busy || !reference}
           />
-          <RowAction icon={icons.Trash2} label='Remove' onClick={() => onRemove(image.id)} disabled={busy} />
+          <RowAction icon={Trash2} label='Remove' onClick={() => onRemove(image.id)} disabled={busy} />
         </div>
       </div>
       <div className='flex gap-3 text-[10px] text-muted-foreground pl-4'>
@@ -403,7 +406,7 @@ function ImageRow({ image, reference, busy, onPull, onRemove }: ImageRowProps) {
 function OrphanImageHeader({ reference }: { reference: string }) {
   return (
     <div className='flex items-center gap-1.5 px-2 py-1.5 text-xs bg-muted/30'>
-      <icons.Layers className='h-3 w-3 shrink-0 text-muted-foreground' />
+      <Layers className='h-3 w-3 shrink-0 text-muted-foreground' />
       <span className='font-medium truncate flex-1 italic text-muted-foreground'>{reference}</span>
     </div>
   )
@@ -538,7 +541,7 @@ export function DockerInventoryTab({
       <div className='flex items-center gap-2 px-2 py-1.5 border-b'>
         <span className='text-xs text-muted-foreground flex-1'>{summary}</span>
         <Button variant='ghost' size='sm' className='h-6 text-[10px] px-1.5' onClick={refresh} disabled={loading}>
-          <icons.RotateCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+          <RotateCw className={cn('h-3 w-3', loading && 'animate-spin')} />
         </Button>
         <ViewModeSwitch mode={mode} onChange={setMode} />
       </div>
@@ -558,25 +561,25 @@ interface RenderProps {
   onImageRemove: (imageId: string) => void
 }
 
-function renderInventory(props: RenderProps): React.ReactNode {
+function renderInventory(props: RenderProps): ReactNode {
   const { groups, mode, busy, onContainerAction, onImagePull, onImageRemove } = props
   if (!groups) {
     return null
   }
 
   if (mode === 'images') {
-    const imageGroups = groups.filter((g) => g.image)
-    if (imageGroups.length === 0) {
+    const images = groups.flatMap(({ image, reference }) => (image ? [{ image, reference }] : []))
+    if (images.length === 0) {
       return <div className='p-3 text-xs text-muted-foreground italic'>No images.</div>
     }
     return (
       <div className='flex flex-col divide-y'>
-        {imageGroups.map((g) => (
+        {images.map(({ image, reference }) => (
           <ImageRow
-            key={g.image!.id}
-            image={g.image!}
-            reference={g.reference}
-            busy={busy === g.image!.id}
+            key={image.id}
+            image={image}
+            reference={reference}
+            busy={busy === image.id}
             onPull={onImagePull}
             onRemove={onImageRemove}
           />
@@ -705,15 +708,21 @@ export function DockerVolumesTab({
       <div className='flex items-center gap-1.5 px-2 py-1.5 border-b'>
         <Input
           value={newName}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewName(e.target.value)}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setNewName(e.target.value)}
           placeholder='volume name'
           className='h-7 text-xs flex-1 font-mono'
         />
-        <Button variant='outline' size='sm' className='h-7 text-xs' onClick={onCreate} disabled={creating || !newName.trim()}>
-          <icons.Plus className='h-3 w-3 mr-1' /> Create
+        <Button
+          variant='outline'
+          size='sm'
+          className='h-7 text-xs'
+          onClick={onCreate}
+          disabled={creating || !newName.trim()}
+        >
+          <Plus className='h-3 w-3 mr-1' /> Create
         </Button>
         <Button variant='ghost' size='sm' className='h-7 text-[10px] px-1.5' onClick={refresh} disabled={loading}>
-          <icons.RotateCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+          <RotateCw className={cn('h-3 w-3', loading && 'animate-spin')} />
         </Button>
       </div>
       <div className='flex-1 overflow-auto'>
@@ -726,7 +735,12 @@ export function DockerVolumesTab({
                 key={v.name}
                 name={v.name}
                 created={v.created}
-                action={{ icon: icons.Trash2, label: 'Delete', onClick: () => onRemove(v.name), disabled: busy === v.name }}
+                action={{
+                  icon: Trash2,
+                  label: 'Delete',
+                  onClick: () => onRemove(v.name),
+                  disabled: busy === v.name,
+                }}
               />
             ))}
           </div>

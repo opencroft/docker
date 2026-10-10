@@ -1,6 +1,7 @@
-import host from '@ext/host'
+import { graph } from '@opencroft/server/graph'
+import { secrets } from '@opencroft/server/secrets'
+import { terminal } from '@opencroft/server/terminal'
 
-import { terminal } from '@opencroft/server'
 import type { DockerContext } from './docker'
 
 interface DockerRegistry {
@@ -28,7 +29,7 @@ function imageHostname(image: string): string | null {
 }
 
 async function decryptSecret(name: string): Promise<string> {
-  const value = await host.secrets.resolve(name)
+  const value = await secrets.resolve(name)
   if (value === null) {
     throw new Error(`Secret "${name}" not found in any Secrets Store`)
   }
@@ -49,7 +50,7 @@ export async function ensureRegistryLogin(ctx: DockerContext, dockerNodeId: stri
   if (!registryHost) {
     return
   }
-  const node = await host.graph.getNode(dockerNodeId)
+  const node = await graph.getNode(dockerNodeId)
   if (!node) {
     return
   }

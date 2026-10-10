@@ -1,8 +1,9 @@
-import { icons, type React } from '@ext/host'
-import { Button } from '@ext/ui'
+import { Button } from '@opencroft/client/ui'
+import { HardDrive } from 'lucide-react'
+import type { ComponentType } from 'react'
 
 export interface VolumeEntryAction {
-  icon: React.ComponentType<{ className?: string }>
+  icon: ComponentType<{ className?: string }>
   label: string
   onClick: () => void
   disabled?: boolean
@@ -20,7 +21,7 @@ export function VolumeEntryRow({ name, created, action, subtitle }: VolumeEntryP
   return (
     <div className='flex flex-col gap-0.5 px-2 py-1.5 text-xs bg-muted/30'>
       <div className='flex items-center gap-1.5'>
-        <icons.HardDrive className='h-3 w-3 shrink-0 text-muted-foreground' />
+        <HardDrive className='h-3 w-3 shrink-0 text-muted-foreground' />
         <span className='font-medium truncate flex-1'>{name}</span>
         <Button
           variant='ghost'

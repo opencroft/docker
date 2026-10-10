@@ -1,6 +1,5 @@
-import { React, useGraphNodes } from '@ext/host'
-
-const { useMemo } = React
+import { useGraphNodes } from '@opencroft/client/canvas'
+import { useMemo } from 'react'
 
 // Core's Secrets Store node, in the qualified form (`<owner>.<extension>.<type>`)
 // graph data carries another extension's node type.

@@ -1,5 +1,4 @@
-import host from '@ext/host'
-import type * as opencroft from '@opencroft/server'
+import { secrets } from '@opencroft/server/secrets'
 
 import { buildDockerExecContext } from './dockerExecContext'
 import { parseNamedVolumes, sameMount, serializeNamedVolumes } from './named-volumes'
@@ -20,6 +19,7 @@ import {
   type DockerTerminalConfigParams,
   type DockerUpParams,
   type DockerVolumeNameParams,
+  deployStatus,
   dockerCheck,
   dockerCheckImageUpdate,
   dockerCreateVolume,
@@ -42,10 +42,16 @@ import {
   dockerStopInstances,
   dockerStopService,
   dockerTerminalConfig,
-  deployStatus,
   dockerUp,
 } from './server/docker'
-import { closeView, type ContainerParams, containerState, watchContainerLogs, watchDeploy, type WatchLogsParams } from './server/log-streams'
+import {
+  type ContainerParams,
+  closeView,
+  containerState,
+  type WatchLogsParams,
+  watchContainerLogs,
+  watchDeploy,
+} from './server/log-streams'
 
 export const actions = {
   'docker.check': (params: DockerCheckParams) => dockerCheck(params),
@@ -83,12 +89,12 @@ interface ActionCtx {
   params: Record<string, unknown>
   inputSource<T = unknown>(
     handleId: string,
-  ): { sourceNodeId: string; sourceHandleId: string; contextType: string; value: T } | undefined
+  ): { sourceNodeId: string; sourceHandleId: string; handleType: string; value: T } | undefined
   connectedSources(
     handleId: string,
   ): { nodeId: string; handleId: string; type?: string; data: Record<string, unknown> }[]
   containingNodes(
-    typeId?: string,
+    type?: string,
   ): { id: string; type?: string; position: { x: number; y: number }; data: Record<string, unknown> }[]
   updateData(patch: Record<string, unknown>): void
   // Present when the host runs the action as a background task, and aborted when that task is
@@ -194,7 +200,7 @@ async function resolveSecrets(data: AppData): Promise<Record<string, string>> {
   }
   const resolved: Record<string, string> = {}
   for (const name of names) {
-    const value = await host.secrets.resolve(name)
+    const value = await secrets.resolve(name)
     if (value === null) {
       throw new Error(`Secret "${name}" not found in any Secrets Store`)
     }
@@ -281,7 +287,11 @@ async function applicationTerminate(ctx: ActionCtx): Promise<void> {
 // The "reboot" action: restart the existing containers in place.
 async function applicationReboot(ctx: ActionCtx): Promise<void> {
   const data = ctx.data as AppData
-  await dockerRestartService({ dockerNodeId: requireDockerNodeId(ctx), applicationNodeId: ctx.nodeId, service: serviceName(ctx, data) })
+  await dockerRestartService({
+    dockerNodeId: requireDockerNodeId(ctx),
+    applicationNodeId: ctx.nodeId,
+    service: serviceName(ctx, data),
+  })
 }
 
 // The "start" action: plain `docker start` of the existing containers.
@@ -336,7 +346,8 @@ async function applicationAttachVolume(ctx: ActionCtx): Promise<void> {
   const volumeName = requireStringParam(ctx, 'volumeName')
   const containerPath = requireStringParam(ctx, 'containerPath')
   const readOnly = Boolean(ctx.params.readOnly)
-  const subpath = typeof ctx.params.subpath === 'string' && ctx.params.subpath.trim() ? ctx.params.subpath.trim() : undefined
+  const subpath =
+    typeof ctx.params.subpath === 'string' && ctx.params.subpath.trim() ? ctx.params.subpath.trim() : undefined
   const directMount = Boolean(ctx.params.directMount)
   const current = parseNamedVolumes(data.namedVolumes ?? '')
   // A volume can be mounted at more than one container path (e.g. two different subpaths of it) —
@@ -436,7 +447,3 @@ export const exposeOutput = (handleId: string, nodeData: Record<string, unknown>
 
   return undefined
 }
-
-export function load(context: opencroft.ExtensionContext) {}
-
-export function unload(context: opencroft.ExtensionContext) {}

@@ -1,24 +1,42 @@
-import { defineExtension } from '@ext/host'
+import type { ExtensionHandle, ResolvedContext } from '@opencroft/client/canvas'
+import { defineExtension } from '@opencroft/client/extension'
 
 import { buildDockerExecContext } from '../dockerExecContext'
-import { applicationContextMenuItems, ApplicationInspector, ApplicationNode, ApplicationTerminalTab, ApplicationVolumesTab } from './nodes/application'
+import {
+  ApplicationInspector,
+  ApplicationNode,
+  ApplicationTerminalTab,
+  ApplicationVolumesTab,
+  applicationContextMenuItems,
+} from './nodes/application'
 import { ApplicationDeployTab, ApplicationLogsTab } from './nodes/application-output'
 import { type DockerData, DockerInspector, DockerInventoryTab, DockerNode, DockerVolumesTab } from './nodes/docker'
 import { type VolumeData, VolumeInspector, VolumeNode } from './nodes/volume'
 
-const DOCKER_HANDLES = [
+const DOCKER_HANDLES: ExtensionHandle[] = [
   { id: 'ctx-in', handleType: 'builtin.core.terminal-context', role: 'target', label: 'Host' },
   { id: 'context-in', handleType: 'builtin.core.terminal-context', role: 'target', label: 'Context' },
   { id: 'docker-out', handleType: 'docker-context', role: 'source', label: 'Docker' },
 ]
 
-const APP_HANDLES = [
+const APP_HANDLES: ExtensionHandle[] = [
   { id: 'docker-in', handleType: 'docker-context', role: 'target', label: 'Docker' },
   { id: 'volumes-in', handleType: 'volume-mount', role: 'target', label: 'Volumes' },
-  { id: 'instance-terminal-', handleType: 'builtin.core.terminal-context', role: 'source', label: 'Terminal', dynamic: true },
+  {
+    id: 'instance-terminal-',
+    handleType: 'builtin.core.terminal-context',
+    role: 'source',
+    label: 'Terminal',
+    dynamic: true,
+  },
 ]
 
-const VOLUME_HANDLES = [{ id: 'vol-out', handleType: 'volume-mount', role: 'source', label: 'Volume' }]
+const VOLUME_HANDLES: ExtensionHandle[] = [
+  { id: 'vol-out', handleType: 'volume-mount', role: 'source', label: 'Volume' },
+]
+
+/** The node's wired inputs, keyed by target handle id, as the host passes them to `exposeOutput`. */
+type Contexts = Record<string, ResolvedContext>
 
 export default defineExtension({
   manifest: {},
@@ -41,7 +59,7 @@ export default defineExtension({
         { id: 'inventory', label: 'Containers', icon: 'Container', component: DockerInventoryTab },
         { id: 'volumes', label: 'Volumes', icon: 'HardDrive', component: DockerVolumesTab },
       ],
-      exposeOutput: (handleId, data, _type, _nodeId, contexts) => {
+      exposeOutput: (handleId: string, data: unknown, _type: string, _nodeId: string, contexts?: Contexts) => {
         if (handleId !== 'docker-out') {
           return undefined
         }
@@ -103,11 +121,18 @@ export default defineExtension({
         { id: 'deploy', label: 'Deploy', icon: 'Rocket', fullHeight: true, component: ApplicationDeployTab },
         { id: 'logs', label: 'Logs', icon: 'ScrollText', fullHeight: true, component: ApplicationLogsTab },
         // Kept mounted, so picking another tab leaves the shell running and closing the inspector ends it.
-        { id: 'terminal', label: 'Terminal', icon: 'TerminalSquare', fullHeight: true, keepMounted: true, component: ApplicationTerminalTab },
+        {
+          id: 'terminal',
+          label: 'Terminal',
+          icon: 'TerminalSquare',
+          fullHeight: true,
+          keepMounted: true,
+          component: ApplicationTerminalTab,
+        },
         { id: 'volumes', label: 'Volumes', icon: 'HardDrive', component: ApplicationVolumesTab },
       ],
       contextMenuItems: applicationContextMenuItems,
-      exposeOutput: (handleId, data, _type, _nodeId, contexts) => {
+      exposeOutput: (handleId: string, data: unknown, _type: string, _nodeId: string, contexts?: Contexts) => {
         if (!handleId.startsWith('instance-terminal-')) {
           return undefined
         }
@@ -134,7 +159,7 @@ export default defineExtension({
       defaultData: { name: '', hostPath: '', containerPath: '', readOnly: false },
       component: VolumeNode,
       inspector: VolumeInspector,
-      exposeOutput: (handleId, data) => {
+      exposeOutput: (handleId: string, data: unknown) => {
         if (handleId !== 'vol-out') {
           return undefined
         }

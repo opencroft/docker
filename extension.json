@@ -1,7 +1,7 @@
 {
   "id": "opencroft.docker",
   "name": "Docker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Docker, Volume, and Application nodes — run containers over a terminal context.",
   "nodes": [
     {
@@ -144,11 +144,20 @@
           "inputSchema": {
             "type": "object",
             "properties": {
-              "tail": { "type": "number", "description": "Number of lines from the end of the logs. Omit for all available." },
-              "since": { "type": "string", "description": "Show logs since this timestamp (RFC3339 or Unix) or relative duration (e.g. \"42m\")." },
+              "tail": {
+                "type": "number",
+                "description": "Number of lines from the end of the logs. Omit for all available."
+              },
+              "since": {
+                "type": "string",
+                "description": "Show logs since this timestamp (RFC3339 or Unix) or relative duration (e.g. \"42m\")."
+              },
               "until": { "type": "string", "description": "Show logs before this timestamp or relative duration." },
               "timestamps": { "type": "boolean", "description": "Prefix each log line with its timestamp." },
-              "containerId": { "type": "string", "description": "Target a specific container/replica. Defaults to the first container found for this service." }
+              "containerId": {
+                "type": "string",
+                "description": "Target a specific container/replica. Defaults to the first container found for this service."
+              }
             }
           }
         },
@@ -162,7 +171,10 @@
             "required": ["volumeName", "containerPath"],
             "properties": {
               "volumeName": { "type": "string", "description": "Friendly volume name (unprefixed)." },
-              "subpath": { "type": "string", "description": "Mount only this subdirectory (or file) of the volume instead of its root." },
+              "subpath": {
+                "type": "string",
+                "description": "Mount only this subdirectory (or file) of the volume instead of its root."
+              },
               "containerPath": { "type": "string", "description": "Mount path inside the container." },
               "readOnly": { "type": "boolean", "description": "Mount read-only. Defaults to false." },
               "directMount": {
@@ -182,7 +194,10 @@
             "required": ["volumeName", "containerPath"],
             "properties": {
               "volumeName": { "type": "string", "description": "Friendly volume name (unprefixed)." },
-              "containerPath": { "type": "string", "description": "The container path this specific mount was attached at." }
+              "containerPath": {
+                "type": "string",
+                "description": "The container path this specific mount was attached at."
+              }
             }
           }
         }

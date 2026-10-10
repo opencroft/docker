@@ -1,4 +1,4 @@
-import { Button, StatusIndicator } from '@ext/ui'
+import { Button, StatusIndicator } from '@opencroft/client/ui'
 
 // The line above every Application tab's terminal (Deploy, Logs and Terminal): what is shown, in
 // one line, and at most one thing to do about it.

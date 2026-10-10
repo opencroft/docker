@@ -1,6 +1,6 @@
 // Shared by extension.ts (server exposeOutput) and src/client.tsx (client exposeOutput) so the
 // 'application' node's instance-terminal-* handle builds an identical docker-exec context in both
-// places. Keep this file framework-free (no @ext/host or React imports) so it can be bundled into
+// places. Keep this file framework-free (no @opencroft/client, @opencroft/server or React imports) so it can be bundled into
 // both the server and client entry points.
 
 export interface DockerExecNodeData {

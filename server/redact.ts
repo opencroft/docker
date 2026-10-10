@@ -1,4 +1,5 @@
-import host from '@ext/host'
+import { graph } from '@opencroft/server/graph'
+import { secrets } from '@opencroft/server/secrets'
 
 import { createStreamRedactor, MIN_VALUE_LENGTH, redactValues, type StreamRedactor } from './redact-values'
 
@@ -68,7 +69,7 @@ import { createStreamRedactor, MIN_VALUE_LENGTH, redactValues, type StreamRedact
  */
 async function urlPasswords(): Promise<string[]> {
   const values: string[] = []
-  for (const node of await host.graph.listNodesByType('application')) {
+  for (const node of await graph.listNodesByType('application')) {
     const env = node.data?.env
     if (typeof env !== 'string') {
       continue
@@ -131,7 +132,7 @@ async function urlPasswords(): Promise<string[]> {
  */
 async function knownValues(): Promise<string[]> {
   const values = new Set<string>()
-  for (const record of await host.secrets.listAll()) {
+  for (const record of await secrets.listAll()) {
     if (record.value.length >= MIN_VALUE_LENGTH) {
       values.add(record.value)
     }

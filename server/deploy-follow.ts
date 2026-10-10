@@ -24,6 +24,7 @@ export function deployFollowScript(paths: { logPath: string; rcPath: string }, m
     '  ended=0',
     '  [ -s "$rc" ] && ended=1',
     '  size=$(wc -c < "$log" 2>/dev/null)',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion in the script text, not a JS placeholder
     '  size=$((${size:-0}))',
     `  if [ "$off" -lt 0 ]; then off=$((size > ${maxBytes} ? size - ${maxBytes} : 0)); fi`,
     '  if [ "$size" -gt "$off" ]; then tail -c +$((off + 1)) "$log" | head -c $((size - off)); off=$size; fi',

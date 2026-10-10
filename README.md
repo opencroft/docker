@@ -16,7 +16,7 @@ Named volumes are created with an `opencroft-` prefix and shown without it. Ever
 
 ## Development
 
-The extension is built and loaded by an OpenCroft instance. Its imports of `@ext/host`, `@ext/ui` and `@opencroft/server` are provided by the host at build time. `@opencroft/server` is a peer dependency that is not published to npm, so install with `--legacy-peer-deps`, as the host does:
+The extension is built and loaded by an OpenCroft instance. Its imports of `@opencroft/client` and `@opencroft/server` (each by module, such as `@opencroft/client/canvas` and `@opencroft/server/graph`), `react`, `lucide-react` and `sonner` are provided by the host at build time. `@opencroft/client` and `@opencroft/server` are peer dependencies that are not published to npm, so install with `--legacy-peer-deps`, as the host does:
 
 ```sh
 npm ci --legacy-peer-deps
@@ -24,6 +24,8 @@ npm test
 ```
 
 The tests run on Node.js 22.18 or later. The deploy-follow tests need `sh`, `wc`, `tail`, `head` and `sleep` on `PATH`, and one needs `/proc`. Each skips with the reason when its tools are missing.
+
+`npm run typecheck` checks the code against the host's types, and `npm run fix` formats and lints it and then runs the typecheck. Both run the `opencroft-dev` command of an OpenCroft core checkout, so run them with the extension inside a core checkout, or with that checkout's `node_modules/.bin` on `PATH`.
 
 ## License
 

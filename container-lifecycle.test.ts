@@ -27,7 +27,11 @@ describe('serviceLifecycle', () => {
   })
 
   test('offers a verb when it applies to any one replica', () => {
-    assert.deepEqual(serviceLifecycle([{ state: 'running' }, { state: 'exited' }]), { start: true, stop: true, reboot: true })
+    assert.deepEqual(serviceLifecycle([{ state: 'running' }, { state: 'exited' }]), {
+      start: true,
+      stop: true,
+      reboot: true,
+    })
   })
 
   test('does not read a state name off the object prototype', () => {
@@ -41,7 +45,10 @@ describe('serviceSummary', () => {
   })
 
   test('counts each shown state, in a fixed order', () => {
-    assert.equal(serviceSummary([{ state: 'exited' }, { state: 'restarting' }, { state: 'running' }, { state: 'running' }]), '2 running · 1 restarting · 1 stopped')
+    assert.equal(
+      serviceSummary([{ state: 'exited' }, { state: 'restarting' }, { state: 'running' }, { state: 'running' }]),
+      '2 running · 1 restarting · 1 stopped',
+    )
   })
 
   test('says "stopped" when nothing is running, restarting or paused', () => {
